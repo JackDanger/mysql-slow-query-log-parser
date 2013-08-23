@@ -1,45 +1,59 @@
-# Usage:
+# Usage (requires Ruby 2.0):
 #
-#   queries = SlowLogAnalyzer.new('/data/fusionio/mysql/slow-query.log')
+#   require 'slow_query_log_analyzer'
+#   queries = SlowQueryLogAnalyzer.new('/data/fusionio/mysql/slow-query.log')
+#   queries.slower_than(5).select do |q|
+#      q[:source]
+#   end.take(3).map do |q|
+#     q.select {|k,v| [:sql, :source, 'Query_time'].include?(k) }
+#   end
 #
-#   queries.slower_than(2.5).reduce({}) do |data, q|
-#     source = q[:source_location]
-#     h[source] || = 0
-#     h[source] += 1
-#     h
-#   end.sort_by(&:last).reverse.take(10)
-#
-class SlowLogAnalyzer
+class SlowQueryLogAnalyzer
   ParserStates = [:loading, :query, :comment]
+  Skip = /^(SET |SHOW |ANALYZE |USE )/i
+  Comment = /^# /
 
   def initialize(filename)
     @filename = filename
     @state = :loading
   end
 
+  def from_file(source_snippet)
+    queries.select {|query| query[:source] =~ /#{source_snippet}/ }
+  end
+
   def slower_than(seconds)
-    sections.each do |section|
-      yield if section['Query_time'] > seconds
+    queries.select do |query|
+      query['Query_time'] > seconds
     end
   end
 
   private
 
-  attr_accessor :query, :line
+  attr_accessor :_query, :_comment
 
   def reset!
-    @query, @line = [], []
+    @_query, @_comment = [], []
   end
 
-  def build_section(query, comment)
-    comment.reduce({sql: query}) do |data, line|
+  def build_query(sql, comment)
+    comment.reduce(extract_sql(sql)) do |data, line|
       data.update extract_comment(line)
     end
   end
 
+  def extract_sql(sql)
+    parts = sql.join("\n").split(' -- ')
+    parts.push(nil) if parts.size == 1
+    {
+      source: parts.pop,
+      sql: parts.join(' -- ')
+    }
+  end
+
   def extract_comment(line)
     Hash[
-      *line.split(/(\w+: )/).drop(1).map(&:strip).map do |value|
+      *line.split(/(\w+: )/).drop(1).map(&:strip).map{|l|l.chomp(':')}.map do |value|
         case value
         when /^\d+$/
           value.to_i
@@ -52,49 +66,47 @@ class SlowLogAnalyzer
     ]
   end
 
-  def sections
+  def queries
     reset!
+    Enumerator.new do |yielder|
+      File.foreach(@filename) do |l|
 
-    file.each_line do |l|
-      line = l.chomp
+        line = l.chomp
 
-      ## This is a shit parser.
+        ## This is a shit parser.
 
-      case @state
-      # God knows what's at the start of the file.
-      when :loading
-        if line =~ /^SET /
-          @state = :comment
-        end
-      # We're collecting the lines of a query
-      when :query
-        if line =~ /^# /
-          # we've finished parsing the query
-          @state = :comment
-          comment << line
-        elsif line =~ /^SET /
-          # don't care about these statements
-        else
-          # keep parsing the query
-          query << line
-        end
-      # We're collecting the lines of data on a query
-      when :comment
-        # keep going?
-        if line =~ /^# /
-          comment << line
-        # finished a comment block?
-        else
-          yield build_section(query, comment)
-          reset!
-          @state = :query
-          query << line if line =~ /^SET /
+        case @state
+        # God knows what's at the start of the file.
+        when :loading
+          if line =~ Skip
+            @state = :comment
+          end
+        # We're collecting the lines of a query
+        when :query
+          if line =~ Comment
+            # we've finished parsing the query
+            @state = :comment
+            _comment << line
+          elsif line =~ Skip
+            # don't care about these statements
+          else
+            # keep parsing the query
+            _query << line
+          end
+        # We're collecting the lines of data on a query
+        when :comment
+          # keep going?
+          if line =~ Comment
+            _comment << line
+          # finished a comment block?
+          else
+            yielder.yield build_query(_query, _comment) if _query.any?
+            reset!
+            @state = :query
+            _query << line unless line =~ Skip
+          end
         end
       end
     end
-  end
-
-  def file
-    @file ||= File.open(@filename)
   end
 end

@@ -1,10 +1,10 @@
 # Usage (requires Ruby 2.0):
 #
 #   require 'slow_query_log_analyzer'
-#   queries = SlowQueryLogAnalyzer.new('/data/fusionio/mysql/slow-query.log')
+#   queries = SlowLogAnalyzer.new('/data/fusionio/mysql/slow-query.log').queries
 #   queries.slower_than(5).select do |q|
 #      q[:source]
-#   end.take(3).map do |q|
+#   end.from_file(/my_slow_controller.rb:123/).drop(5).map do |q|
 #     q.select {|k,v| [:sql, :source, 'Query_time'].include?(k) }
 #   end
 #
@@ -18,57 +18,31 @@ class SlowQueryLogAnalyzer
     @state = :loading
   end
 
-  def from_file(source_snippet)
-    queries.select {|query| query[:source] =~ /#{source_snippet}/ }
-  end
-
-  def slower_than(seconds)
-    queries.select do |query|
-      query['Query_time'] > seconds
+  module Query
+    def from_file(pattern)
+      pattern = /#{pattern}/ if pattern.is_a? String
+      select {|query| query[:source] =~ pattern }
     end
-  end
 
-  private
-
-  attr_accessor :_query, :_comment
-
-  def reset!
-    @_query, @_comment = [], []
-  end
-
-  def build_query(sql, comment)
-    comment.reduce(extract_sql(sql)) do |data, line|
-      data.update extract_comment(line)
-    end
-  end
-
-  def extract_sql(sql)
-    parts = sql.join("\n").split(' -- ')
-    parts.push(nil) if parts.size == 1
-    {
-      source: parts.pop,
-      sql: parts.join(' -- ')
-    }
-  end
-
-  def extract_comment(line)
-    Hash[
-      *line.split(/(\w+: )/).drop(1).map(&:strip).map{|l|l.chomp(':')}.map do |value|
-        case value
-        when /^\d+$/
-          value.to_i
-        when /^\d+\.?\d*$/
-          value.to_f
-        else
-          value
-        end
+    def slower_than(seconds)
+      select do |query|
+        query['Query_time'] > seconds
       end
-    ]
+    end
+
+    require 'stringio'
+    require 'pp'
+    def inspect
+      io = StringIO.new
+      pp to_a, io
+      io.read
+    end
   end
+  Enumerator::Lazy.send :include, Query
 
   def queries
     reset!
-    Enumerator.new do |yielder|
+    lazy do |yielder|
       File.foreach(@filename) do |l|
 
         line = l.chomp
@@ -108,5 +82,47 @@ class SlowQueryLogAnalyzer
         end
       end
     end
+  end
+
+  private
+
+  attr_accessor :_query, :_comment
+
+  def lazy(&block)
+    Enumerator.new(&block).lazy
+  end
+
+  def reset!
+    @_query, @_comment = [], []
+  end
+
+  def build_query(sql, comment)
+    comment.reduce(extract_sql(sql)) do |data, line|
+      data.update extract_comment(line)
+    end
+  end
+
+  def extract_sql(sql)
+    parts = sql.join("\n").split(' -- ')
+    parts.push(nil) if parts.size == 1
+    {
+      source: parts.pop,
+      sql: parts.join(' -- ')
+    }
+  end
+
+  def extract_comment(line)
+    Hash[
+      *line.split(/(\w+: )/).drop(1).map(&:strip).map{|l|l.chomp(':')}.map do |value|
+        case value
+        when /^\d+$/
+          value.to_i
+        when /^\d+\.?\d*$/
+          value.to_f
+        else
+          value
+        end
+      end
+    ]
   end
 end

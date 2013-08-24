@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 # Usage (requires Ruby 2.0):
 #
 #   require 'slow_query_log_analyzer'
@@ -32,12 +33,18 @@ class SlowQueryLogAnalyzer
 
     require 'stringio'
     require 'pp'
+    def to_s
+      arr = to_a
+      pp arr
+      arr
+    end
+
     def inspect
-      io = StringIO.new
-      pp to_a, io
-      io.read
+      #puts "Reader #{yielder.linecount} lines in #{"%0.2f" % (Time.now-start)} seconds"
+      to_s
     end
   end
+
   Enumerator::Lazy.send :include, Query
 
   def queries
@@ -89,7 +96,17 @@ class SlowQueryLogAnalyzer
   attr_accessor :_query, :_comment
 
   def lazy(&block)
-    Enumerator.new(&block).lazy
+    e = Enumerator.new(&block).lazy
+    class << e
+      attr_accessor :start, :linecount
+      def each(*a)
+        self.linecount += 1
+        super
+      end
+    end
+    e.start = Time.now
+    e.linecount = 0
+    e
   end
 
   def reset!
@@ -125,4 +142,12 @@ class SlowQueryLogAnalyzer
       end
     ]
   end
+end
+
+if __FILE__ == $0
+  file, cmd = ARGV
+  unless File.exist?(file) && cmd
+    puts "Usage: slow_query_log_analyzer /path/to/slow-query.log \"from_file(/filename_pattern/).slower_than(2).first\""
+  end
+  p SlowQueryLogAnalyzer.new(file).queries.instance_eval(cmd)
 end

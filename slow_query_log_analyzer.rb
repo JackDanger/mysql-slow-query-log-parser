@@ -1,6 +1,14 @@
 #!/usr/bin/env ruby
 # Usage (requires Ruby 2.0):
 #
+# As a command-line tool:
+#
+#   ./slow_query_log_analyzer.rb \
+#      /data/fusionio/mysql/slow-query.log \
+#      "slower_than(5).drop(10).take(2)"
+#
+# In IRB:
+#
 #   require 'slow_query_log_analyzer'
 #   queries = SlowLogAnalyzer.new('/data/fusionio/mysql/slow-query.log').queries
 #   # Gated by a specific minimum slowness:
